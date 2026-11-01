@@ -3,75 +3,159 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vlc="using:LibVLCSharp.Platforms.Windows"
-    Background="Black">    <Grid>
-        <vlc:VideoView x:Name="Video" Initialized="Video_Initialized" />
+    Background="Black">
 
-        <ProgressRing x:Name="Buffering" IsActive="True" Width="72" Height="72" />
+    <Grid>
+        <vlc:VideoView
+            x:Name="Video"
+            Initialized="Video_Initialized" />
 
-        <Grid x:Name="Overlay" VerticalAlignment="Bottom" Padding="64,24,64,40">
+        <ProgressRing
+            x:Name="Buffering"
+            Width="72"
+            Height="72"
+            IsActive="True" />
+
+        <Grid
+            x:Name="Overlay"
+            Padding="64,24,64,40"
+            VerticalAlignment="Bottom">
             <Grid.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                     <GradientStop Color="#00000000" Offset="0" />
                     <GradientStop Color="#D0000000" Offset="1" />
                 </LinearGradientBrush>
             </Grid.Background>
+
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <TextBlock x:Name="TitleText" FontSize="28" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+            <TextBlock
+                x:Name="TitleText"
+                FontSize="28"
+                FontWeight="SemiBold"
+                TextTrimming="CharacterEllipsis" />
 
-            <Grid Grid.Row="1" Margin="0,12,0,0" ColumnSpacing="16">
+            <Grid
+                Grid.Row="1"
+                Margin="0,12,0,0"
+                ColumnSpacing="16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="PositionText" Text="0:00" VerticalAlignment="Center" />
-                <ProgressBar x:Name="Progress" Grid.Column="1" Maximum="1" Height="6" VerticalAlignment="Center"
-                             Foreground="{StaticResource AccentPurpleBrush}" />
-                <TextBlock x:Name="DurationText" Grid.Column="2" Text="0:00" VerticalAlignment="Center" />
+
+                <TextBlock
+                    x:Name="PositionText"
+                    VerticalAlignment="Center"
+                    Text="0:00" />
+
+                <ProgressBar
+                    x:Name="Progress"
+                    Grid.Column="1"
+                    Height="6"
+                    Maximum="1"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource AccentPurpleBrush}" />
+
+                <TextBlock
+                    x:Name="DurationText"
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    Text="0:00" />
             </Grid>
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12" Margin="0,16,0,0"
-                        XYFocusKeyboardNavigation="Enabled">
 
-                <Button x:Name="BackButton"  Click="Rewind_Click" ToolTipService.ToolTip="Back 10s">
-                    <SymbolIcon Symbol="Previous" />
+            <StackPanel
+                Grid.Row="2"
+                Margin="0,16,0,0"
+                HorizontalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="12"
+                XYFocusKeyboardNavigation="Enabled">
 
+                <Button
+                    x:Name="BackButton"
+                    Click="Rewind_Click"
+                    ToolTipService.ToolTip="Back 10s">
+                    <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xEB9E;" />
                 </Button>
-                <Button x:Name="PlayPauseButton"  Click="PlayPause_Click">
-                    <SymbolIcon x:Name="PlayPauseIcon" Symbol="Pause" />
+
+                <Button
+                    x:Name="PlayPauseButton"
+                    Click="PlayPause_Click">
+                    <SymbolIcon
+                        x:Name="PlayPauseIcon"
+                        Symbol="Pause" />
                 </Button>
-                <Button x:Name="ForwardButton" Click="Forward_Click" ToolTipService.ToolTip="Forward 30s">
-                    <SymbolIcon Symbol="Next" />
+
+                <Button
+                    x:Name="ForwardButton"
+                    Click="Forward_Click"
+                    ToolTipService.ToolTip="Forward 30s">
+                    <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xEB9D;" />
                 </Button>
-                <Button x:Name="AudioButton" ToolTipService.ToolTip="Audio">
+
+                <Button
+                    x:Name="AudioButton"
+                    ToolTipService.ToolTip="Audio">
                     <SymbolIcon Symbol="Volume" />
                     <Button.Flyout>
-                        <MenuFlyout x:Name="AudioMenu" Opening="AudioMenu_Opening" />
+                        <MenuFlyout
+                            x:Name="AudioMenu"
+                            Opening="AudioMenu_Opening" />
                     </Button.Flyout>
                 </Button>
-                <Button x:Name="SubtitleButton" ToolTipService.ToolTip="Subtitles">
+
+                <Button
+                    x:Name="SubtitleButton"
+                    ToolTipService.ToolTip="Subtitles">
                     <SymbolIcon Symbol="ClosedCaption" />
                     <Button.Flyout>
-                        <MenuFlyout x:Name="SubtitleMenu" Opening="SubtitleMenu_Opening" />
+                        <MenuFlyout
+                            x:Name="SubtitleMenu"
+                            Opening="SubtitleMenu_Opening" />
+                    </Button.Flyout>
+                </Button>
+
+                <Button
+                    x:Name="ChapterButton"
+                    ToolTipService.ToolTip="Chapters"
+                    Visibility="Collapsed">
+                    <SymbolIcon Symbol="List" />
+                    <Button.Flyout>
+                        <MenuFlyout
+                            x:Name="ChapterMenu"
+                            Opening="ChapterMenu_Opening" />
                     </Button.Flyout>
                 </Button>
             </StackPanel>
-            <StackPanel Orientation="Horizontal"
-            HorizontalAlignment="Right"
-            Spacing="16">
-                <TextBlock x:Name="CurrentClockText"
-               FontSize="18" />
 
-                <TextBlock x:Name="RemainingClockText"
-               FontSize="18" />
+            <StackPanel
+                Grid.Row="2"
+                HorizontalAlignment="Right"
+                Orientation="Horizontal"
+                Spacing="16">
+                <TextBlock
+                    x:Name="CurrentClockText"
+                    FontSize="18" />
+                <TextBlock
+                    x:Name="RemainingClockText"
+                    FontSize="18" />
             </StackPanel>
         </Grid>
-        <TextBlock x:Name="ErrorText" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"
-                   FontSize="22" TextWrapping="Wrap" MaxWidth="800" TextAlignment="Center" />
+
+        <TextBlock
+            x:Name="ErrorText"
+            MaxWidth="800"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            FontSize="22"
+            TextAlignment="Center"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
     </Grid>
 </Page>
-    

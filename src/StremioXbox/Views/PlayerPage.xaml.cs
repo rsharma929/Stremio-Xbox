@@ -26,6 +26,7 @@ namespace StremioXbox.Views
         private double _previousRightTrigger;
         private static readonly TimeSpan OverlayTimeout = TimeSpan.FromSeconds(4);
         private double _previousThumbstickX;
+        private bool _suppressGamepadA;
 
         private readonly DispatcherTimer _overlayTimer = new DispatcherTimer { Interval = OverlayTimeout };
         private readonly DisplayRequest _displayRequest = new DisplayRequest();
@@ -42,6 +43,7 @@ namespace StremioXbox.Views
         private bool _pendingServerForce;
         private long _resumeTimeMs;
         private bool _resumeApplied;
+        private bool _completionHandled;
 
         private const long PlaybackSaveIntervalMs = 5000;
         private const string PlaybackStatePrefix = "playbackState:";
@@ -78,11 +80,13 @@ namespace StremioXbox.Views
             _args = (PlayerArgs)e.Parameter;
             _resumeTimeMs = LoadSavedPlaybackTime(_args?.VideoId);
             _resumeApplied = false;
+            _completionHandled = false;
             TitleText.Text = _args.Title ?? "";
             _displayRequest.RequestActive();
             ShowOverlay();
             _gamepadTimer.Start();
             _clockTimer.Start();
+            _suppressGamepadA = false;
         }
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -133,12 +137,7 @@ namespace StremioXbox.Views
             _player.Buffering += (s, a) => OnUi(() => Buffering.IsActive = a.Cache < 100);
             _player.TimeChanged += (s, a) => OnUi(() => UpdatePosition(a.Time));
             _player.EncounteredError += (s, a) => OnUi(() => ShowError("Playback failed. The stream may be offline or unsupported."));
-            _player.EndReached += (s, a) => OnUi(() =>
-            {
-                SavePlaybackPosition("ended", true);
-                if (Frame.CanGoBack)
-                    Frame.GoBack();
-            });
+            _player.EndReached += (s, a) => OnUi(OnPlaybackEnded);
             _player.Vout += (s, a) => OnUi(MatchDisplay);
             Video.MediaPlayer = _player;
 
@@ -165,6 +164,82 @@ namespace StremioXbox.Views
             });
         }
 
+        private async void OnPlaybackEnded()
+        {
+            if (_completionHandled)
+                return;
+
+            _completionHandled = true;
+            SavePlaybackPosition("ended", true);
+            await MarkCurrentVideoWatchedAsync();
+
+            if (Frame.CanGoBack)
+                Frame.GoBack();
+        }
+
+        private async Task MarkCurrentVideoWatchedAsync()
+        {
+            if (!AppServices.Settings.IsLoggedIn ||
+                string.IsNullOrWhiteSpace(_args?.MetaId) ||
+                string.IsNullOrWhiteSpace(_args?.VideoId))
+            {
+                return;
+            }
+
+            try
+            {
+                await AppServices.EnsureAddonsLoadedAsync();
+
+                var libraryItems = await AppServices.Api.GetLibraryAsync(
+                    AppServices.Settings.AuthKey);
+                var libraryItem = libraryItems.FirstOrDefault(item =>
+                    string.Equals(
+                        item.Id,
+                        _args.MetaId,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (libraryItem == null)
+                    return;
+
+                var meta = await AppServices.Addons.GetMetaAsync(
+                    _args.Type,
+                    _args.MetaId);
+                var episodes = WatchStateHelper.OrderEpisodes(meta?.Videos);
+                var video = episodes.FirstOrDefault(item =>
+                    string.Equals(
+                        item.Id,
+                        _args.VideoId,
+                        StringComparison.OrdinalIgnoreCase));
+
+                // Movies do not have an episode bitfield. This completion path
+                // currently applies to series episodes only.
+                if (video == null)
+                    return;
+
+                var watched = WatchStateHelper.SetVideo(
+                    libraryItem.State?.Watched,
+                    episodes,
+                    video,
+                    true);
+
+                await AppServices.Api.UpdateLibraryWatchedAsync(
+                    AppServices.Settings.AuthKey,
+                    libraryItem.Id,
+                    watched,
+                    true);
+
+                Debug.WriteLine(
+                    "Episode marked watched on completion: videoId=" +
+                    _args.VideoId +
+                    ", libraryId=" + libraryItem.Id);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    "Completion watch update failed: " + ex.Message);
+            }
+        }
+
         private void OnPlaying()
         {
             ApplySavedPlaybackPosition();
@@ -174,6 +249,8 @@ namespace StremioXbox.Views
             ErrorText.Visibility = Visibility.Collapsed;
             PlayPauseIcon.Symbol = Symbol.Pause;
             DurationText.Text = Format(_player?.Length ?? 0);
+
+            RefreshChapters();
 
             ShowOverlay();
         }
@@ -286,6 +363,78 @@ namespace StremioXbox.Views
                 Overlay.Visibility = Visibility.Collapsed;
         }
 
+        private void RefreshChapters()
+        {
+            if (_player == null)
+            {
+                ChapterButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            try
+            {
+                var chapters = _player.ChapterDescription(_player.Title);
+                ChapterButton.Visibility = chapters != null && chapters.Length > 0
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+
+                FillChapterMenu(chapters);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Chapter discovery failed: " + ex.Message);
+                ChapterButton.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void FillChapterMenu(
+            LibVLCSharp.Shared.Structures.TrackDescription[] chapters)
+        {
+            ChapterMenu.Items.Clear();
+
+            if (chapters == null || chapters.Length == 0)
+            {
+                ChapterMenu.Items.Add(new MenuFlyoutItem
+                {
+                    Text = "No chapters",
+                    IsEnabled = false
+                });
+                return;
+            }
+
+            for (var i = 0; i < chapters.Length; i++)
+            {
+                var chapter = chapters[i];
+                var chapterNumber = i + 1;
+                var chapterId = chapter.Id;
+                var chapterName = string.IsNullOrWhiteSpace(chapter.Name)
+                    ? "Chapter " + chapterNumber
+                    : chapter.Name;
+
+                var item = new MenuFlyoutItem
+                {
+                    Text = chapterNumber + ". " + chapterName,
+                    Tag = chapterId
+                };
+                item.Click += (s, e) => SelectChapter(chapterId);
+                ChapterMenu.Items.Add(item);
+            }
+        }
+
+        private void SelectChapter(int chapterId)
+        {
+            if (_player == null)
+                return;
+
+            _player.Chapter = chapterId;
+            ShowOverlay();
+        }
+
+        private void ChapterMenu_Opening(object sender, object e)
+        {
+            RefreshChapters();
+        }
+
         private void GamepadTimer_Tick(object sender, object e)
         {
             if (Gamepad.Gamepads.Count == 0)
@@ -294,16 +443,36 @@ namespace StremioXbox.Views
             var reading = Gamepad.Gamepads[0].GetCurrentReading();
             var buttons = reading.Buttons;
 
+            var directionalInput =
+                buttons.HasFlag(GamepadButtons.DPadLeft) ||
+                buttons.HasFlag(GamepadButtons.DPadRight) ||
+                buttons.HasFlag(GamepadButtons.DPadUp) ||
+                buttons.HasFlag(GamepadButtons.DPadDown) ||
+                Math.Abs(reading.LeftThumbstickX) >= 0.65 ||
+                Math.Abs(reading.LeftThumbstickY) >= 0.65;
+
+            var overlayWasVisible = Overlay.Visibility == Visibility.Visible;
+            if (directionalInput)
+            {
+                if (!overlayWasVisible)
+                    ShowOverlay(true);
+                _suppressGamepadA = true;
+            }
+            else if (!buttons.HasFlag(GamepadButtons.A))
+            {
+                _suppressGamepadA = false;
+            }
+
             // A = play/pause
-            if (Pressed(buttons, GamepadButtons.A))
-                if (Overlay.Visibility != Visibility.Visible)
+            if (Pressed(buttons, GamepadButtons.A) && !_suppressGamepadA)
+                if (!overlayWasVisible)
                 {
                     TogglePause();
                 }
 
 
             // Left stick or D-pad left/right = seek
-            if (Overlay.Visibility != Visibility.Visible)
+            if (!overlayWasVisible)
             {
                 if (Pressed(buttons, GamepadButtons.DPadLeft) ||
                     (StickPressed(reading.LeftThumbstickX, _previousThumbstickX) &&
