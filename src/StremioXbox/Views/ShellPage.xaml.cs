@@ -112,6 +112,39 @@ namespace StremioXbox.Views
             return true;
         }
 
+        public void RestorePlaybackPath(PlayerArgs args)
+        {
+            var libraryItem = Nav.MenuItems
+                .OfType<NavigationViewItem>()
+                .FirstOrDefault(item =>
+                    string.Equals(item.Tag as string, "library",
+                        StringComparison.OrdinalIgnoreCase));
+
+            if (libraryItem != null)
+                Nav.SelectedItem = libraryItem;
+
+            ContentFrame.Navigate(typeof(LibraryPage));
+            ContentFrame.BackStack.Clear();
+
+            if (args == null || string.IsNullOrWhiteSpace(args.MetaId))
+                return;
+
+            ContentFrame.Navigate(typeof(DetailPage), new MetaArgs
+            {
+                Type = args.Type,
+                Id = args.MetaId
+            });
+
+            ContentFrame.Navigate(typeof(StreamsPage), new StreamsArgs
+            {
+                Type = args.Type,
+                VideoId = args.VideoId,
+                MetaId = args.MetaId,
+                Title = args.Title,
+                Background = args.Background
+            });
+        }
+
         private void Nav_SelectionChanged(
             NavigationView sender,
             NavigationViewSelectionChangedEventArgs args)

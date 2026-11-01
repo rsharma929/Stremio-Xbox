@@ -101,7 +101,17 @@ namespace StremioXbox
             if (root == null)
                 return;
 
-            if (root.Content is ShellPage shell && shell.TryGoBack())
+            if (root.Content is PlayerPage player)
+            {
+                var playerArgs = player.CurrentArgs;
+                player.HandleBackNavigation();
+
+                if (root.Content is ShellPage shell)
+                    shell.RestorePlaybackPath(playerArgs);
+
+                e.Handled = true;
+            }
+            else if (root.Content is ShellPage shell && shell.TryGoBack())
             {
                 e.Handled = true;
             }

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Stremio.Core.Addons;
@@ -112,7 +114,159 @@ namespace Stremio.Core.Api
                 ?? new List<LibraryItem>();
         }
 
-        // Step 1: create the QR login code.
+        public async Task UpdateLibraryPlaybackAsync(
+            string authKey,
+            string libraryItemId,
+            string videoId,
+            long timeOffset,
+            long duration,
+            CancellationToken ct = default(CancellationToken))
+        {
+            if (string.IsNullOrWhiteSpace(authKey) ||
+                string.IsNullOrWhiteSpace(libraryItemId))
+            {
+                return;
+            }
+
+            var result = await CallAsync(
+                "datastoreGet",
+                new JObject
+                {
+                    ["authKey"] = authKey,
+                    ["collection"] = "libraryItem",
+                    ["ids"] = new JArray(libraryItemId),
+                    ["all"] = false,
+                },
+                ct).ConfigureAwait(false);
+
+            var items = result as JArray;
+            JObject libraryItem = null;
+
+            if (items != null)
+            {
+                foreach (var item in items.OfType<JObject>())
+                {
+                    if (string.Equals(
+                        (string)item["_id"],
+                        libraryItemId,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        libraryItem = item;
+                        break;
+                    }
+                }
+            }
+
+            if (libraryItem == null)
+                return;
+
+            var state = libraryItem["state"] as JObject ?? new JObject();
+            state["timeOffset"] = timeOffset;
+            state["duration"] = duration;
+            state["video_id"] = videoId ?? libraryItemId;
+            libraryItem["state"] = state;
+
+            await CallAsync(
+                "datastorePut",
+                new JObject
+                {
+                    ["authKey"] = authKey,
+                    ["collection"] = "libraryItem",
+                    ["changes"] = new JArray(libraryItem),
+                },
+                ct).ConfigureAwait(false);
+        }
+
+        public async Task UpdateLibraryWatchedAsync(
+            string authKey,
+            string libraryItemId,
+            string watched,
+            bool markWatched = true,
+            CancellationToken ct = default(CancellationToken))
+        {
+            if (string.IsNullOrWhiteSpace(authKey) ||
+                string.IsNullOrWhiteSpace(libraryItemId) ||
+                string.IsNullOrWhiteSpace(watched))
+            {
+                return;
+            }
+
+            var result = await CallAsync(
+                "datastoreGet",
+                new JObject
+                {
+                    ["authKey"] = authKey,
+                    ["collection"] = "libraryItem",
+                    ["ids"] = new JArray(libraryItemId),
+                    ["all"] = false,
+                },
+                ct).ConfigureAwait(false);
+
+            var items = result as JArray;
+            JObject libraryItem = null;
+
+            if (items != null)
+            {
+                foreach (var item in items.OfType<JObject>())
+                {
+                    if (string.Equals(
+                        (string)item["_id"],
+                        libraryItemId,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        libraryItem = item;
+                        break;
+                    }
+                }
+            }
+
+            if (libraryItem == null)
+                return;
+
+            var state = libraryItem["state"] as JObject ?? new JObject();
+            state["watched"] = watched;
+            libraryItem["state"] = state;
+            libraryItem["_mtime"] = DateTime.UtcNow.ToString("O");
+
+            await CallAsync(
+                "datastorePut",
+                new JObject
+                {
+                    ["authKey"] = authKey,
+                    ["collection"] = "libraryItem",
+                    ["changes"] = new JArray(libraryItem),
+                },
+                ct).ConfigureAwait(false);
+
+            var verification = await CallAsync(
+                "datastoreGet",
+                new JObject
+                {
+                    ["authKey"] = authKey,
+                    ["collection"] = "libraryItem",
+                    ["ids"] = new JArray(libraryItemId),
+                    ["all"] = false,
+                },
+                ct).ConfigureAwait(false);
+
+            var verifiedItem = (verification as JArray)?
+                .OfType<JObject>()
+                .FirstOrDefault(item => string.Equals(
+                    (string)item["_id"],
+                    libraryItemId,
+                    StringComparison.OrdinalIgnoreCase));
+
+            var verifiedWatched = (string)verifiedItem?["state"]?["watched"];
+            if (!string.Equals(verifiedWatched, watched,
+                StringComparison.Ordinal))
+            {
+                throw new StremioApiException(
+                    "Stremio did not confirm the watched-state update.");
+            }
+        }
+
+        // Step 1:
+        // Create a QR login code.
         public async Task<LinkCodeResult> CreateLinkCodeAsync(
             CancellationToken ct = default(CancellationToken))
         {
@@ -186,18 +340,17 @@ namespace Stremio.Core.Api
             }
         }
 
-        // Checks whether the user has completed QR login.
-        // Returns null while login is still pending.
+        // Step 3:
+        // Check whether the user has completed login.
+        // A null result means the user has not completed login yet.
         public async Task<LinkAuthKeyResult> ReadLinkCodeAsync(
             string code,
             CancellationToken ct = default(CancellationToken))
         {
             if (string.IsNullOrWhiteSpace(code))
-            {
                 throw new ArgumentException(
                     "A login code is required.",
                     nameof(code));
-            }
 
             var url =
                 "https://link.stremio.com/api/v2/read" +
@@ -250,7 +403,8 @@ namespace Stremio.Core.Api
             }
         }
 
-        // Step 3: poll for up to five minutes.
+        // Polls the read endpoint after the QR code has been displayed.
+        // Polls every five seconds for up to five minutes.
         public async Task<LinkAuthKeyResult>
             WaitForLinkAuthKeyAsync(
                 string code,
@@ -281,11 +435,68 @@ namespace Stremio.Core.Api
             return null;
         }
 
+        private static string RedactSecrets(string jsonText)
+        {
+            try
+            {
+                var token = JToken.Parse(jsonText);
+                RedactSecrets(token);
+                return token.ToString(Formatting.None);
+            }
+            catch (Exception)
+            {
+                return jsonText;
+            }
+        }
+
+        private static void RedactSecrets(JToken token)
+        {
+            var objectToken = token as JObject;
+            if (objectToken != null)
+            {
+                foreach (var property in objectToken.Properties().ToList())
+                {
+                    if (string.Equals(property.Name, "authKey",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(property.Name, "password",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(property.Name, "accessToken",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        property.Value = "<redacted>";
+                    }
+                    else
+                    {
+                        RedactSecrets(property.Value);
+                    }
+                }
+
+                return;
+            }
+
+            var arrayToken = token as JArray;
+            if (arrayToken != null)
+            {
+                foreach (var child in arrayToken)
+                    RedactSecrets(child);
+            }
+        }
+
         private async Task<JToken> CallAsync(
             string method,
             JObject body,
             CancellationToken ct)
         {
+            var debugBody = (JObject)body.DeepClone();
+            if (debugBody["password"] != null)
+                debugBody["password"] = "<redacted>";
+            if (debugBody["authKey"] != null)
+                debugBody["authKey"] = "<redacted>";
+
+            Debug.WriteLine(
+                "[StremioApi] REQUEST " + method +
+                " body=" + debugBody.ToString(Formatting.None));
+
             var content = new StringContent(
                 body.ToString(Formatting.None),
                 Encoding.UTF8,
@@ -299,6 +510,12 @@ namespace Stremio.Core.Api
                 var text = await response.Content
                     .ReadAsStringAsync()
                     .ConfigureAwait(false);
+
+                Debug.WriteLine(
+                    "[StremioApi] RESPONSE " + method +
+                    " status=" + (int)response.StatusCode +
+                    " " + response.StatusCode +
+                    " body=" + RedactSecrets(text));
 
                 var json = JObject.Parse(text);
                 var error = json["error"];
@@ -397,5 +614,8 @@ namespace Stremio.Core.Api
 
         [JsonProperty("video_id")]
         public string VideoId { get; set; }
+
+        [JsonProperty("watched")]
+        public string Watched { get; set; }
     }
 }

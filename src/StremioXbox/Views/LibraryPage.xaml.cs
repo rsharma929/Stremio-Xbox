@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using Stremio.Core.Api;
 using StremioXbox.Services;
 using Windows.Gaming.Input;
+using Windows.Storage;
 using Windows.UI;
 using Windows.UI.Core;
 using Windows.UI.Xaml;
@@ -19,11 +22,49 @@ namespace StremioXbox.Views
     {
         public string Key { get; set; }
         public string Title { get; set; }
-        public ObservableCollection<LibraryItem> Items { get; } =
-            new ObservableCollection<LibraryItem>();
+        public ObservableCollection<LibraryCard> Items { get; } =
+            new ObservableCollection<LibraryCard>();
 
         public Visibility RowVisibility =>
             Items.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    public sealed class LibraryCard
+    {
+        public LibraryItem Item { get; }
+        public SavedPlaybackState Playback { get; }
+
+        public string Id => Item.Id;
+        public string Type => Item.Type;
+        public string Poster => Item.Poster;
+        public string Name => Playback?.Title ?? Item.Name;
+        public bool IsContinueWatching => Playback != null;
+        public string PlaybackVideoId => Playback?.VideoId ?? Item.Id;
+        public string PlaybackUrl => Playback?.Url;
+        public Visibility ProgressVisibility =>
+            Playback == null ? Visibility.Collapsed : Visibility.Visible;
+        public double ProgressWidth =>
+            Playback == null || Playback.Duration <= 0
+                ? 0
+                : 300.0 * Math.Min(1.0, (double)Playback.TimeMs / Playback.Duration);
+
+        public LibraryCard(LibraryItem item) { Item = item; }
+
+        public LibraryCard(LibraryItem item, SavedPlaybackState playback)
+        {
+            Item = item;
+            Playback = playback;
+        }
+    }
+
+    public sealed class SavedPlaybackState
+    {
+        public string VideoId { get; set; }
+        public string Title { get; set; }
+        public long TimeMs { get; set; }
+        public long Duration { get; set; }
+        public DateTime SavedUtc { get; set; }
+        public string Url { get; set; }
     }
 
     public sealed partial class LibraryPage : Page
@@ -100,9 +141,13 @@ namespace StremioXbox.Views
                     .ToList();
 
                 _rows.Clear();
-                AddRow("movies", "Movies", visible.Where(IsMovie));
-                AddRow("series", "Series", visible.Where(IsSeries));
-                AddRow("other", "Other", visible.Where(i => !IsMovie(i) && !IsSeries(i)));
+                var continueCards = BuildContinueWatchingCards(visible);
+                if (continueCards.Count > 0)
+                    AddRow("continue", "Continue Watching", continueCards);
+
+                AddRow("movies", "Movies", visible.Where(IsMovie).Select(i => new LibraryCard(i)));
+                AddRow("series", "Series", visible.Where(IsSeries).Select(i => new LibraryCard(i)));
+                AddRow("other", "Other", visible.Where(i => !IsMovie(i) && !IsSeries(i)).Select(i => new LibraryCard(i)));
 
                 if (_rows.Count == 0)
                     ShowMessage("Your library is empty.");
@@ -119,7 +164,7 @@ namespace StremioXbox.Views
             }
         }
 
-        private void AddRow(string key, string title, IEnumerable<LibraryItem> items)
+        private void AddRow(string key, string title, IEnumerable<LibraryCard> items)
         {
             var row = new LibraryRow { Key = key, Title = title };
             foreach (var item in items)
@@ -134,6 +179,77 @@ namespace StremioXbox.Views
         private static bool IsSeries(LibraryItem item) =>
             string.Equals(item.Type, "series", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(item.Type, "tv", StringComparison.OrdinalIgnoreCase);
+
+        private static List<LibraryCard> BuildContinueWatchingCards(
+            List<LibraryItem> libraryItems)
+        {
+            var saved = new List<SavedPlaybackState>();
+
+            foreach (var pair in ApplicationData.Current.LocalSettings.Values)
+            {
+                if (!pair.Key.StartsWith("playbackState:", StringComparison.Ordinal) ||
+                    !(pair.Value is string raw))
+                    continue;
+
+                var parts = raw.Split('|');
+                if (parts.Length < 5 ||
+                    !long.TryParse(parts[2], out var timeMs) ||
+                    !long.TryParse(parts[3], out var duration) ||
+                    !DateTime.TryParse(parts[4], CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind, out var savedUtc))
+                    continue;
+
+                if (timeMs <= 0 || duration <= 0 || timeMs >= duration * 0.95)
+                    continue;
+
+                saved.Add(new SavedPlaybackState
+                {
+                    VideoId = parts[0],
+                    Title = parts[1],
+                    TimeMs = timeMs,
+                    Duration = duration,
+                    SavedUtc = savedUtc,
+                    Url = parts.Length >= 6
+                        ? Uri.UnescapeDataString(parts[5])
+                        : null
+                });
+            }
+
+            var cards = new List<LibraryCard>();
+            foreach (var item in libraryItems.Where(i => IsMovie(i) || IsSeries(i)))
+            {
+                var localState = saved
+                    .Where(s => string.Equals(s.VideoId, item.Id,
+                        StringComparison.OrdinalIgnoreCase) ||
+                        (IsSeries(item) && s.VideoId.StartsWith(item.Id + ":",
+                            StringComparison.OrdinalIgnoreCase)))
+                    .OrderByDescending(s => s.SavedUtc)
+                    .FirstOrDefault();
+
+                var remoteState = item.State != null &&
+                    !string.IsNullOrWhiteSpace(item.State.VideoId) &&
+                    item.State.TimeOffset > 0 &&
+                    item.State.Duration > 0 &&
+                    item.State.TimeOffset < item.State.Duration * 0.95
+                    ? new SavedPlaybackState
+                    {
+                        VideoId = item.State.VideoId,
+                        Title = item.Name,
+                        TimeMs = item.State.TimeOffset,
+                        Duration = item.State.Duration,
+                        SavedUtc = item.ModifiedTime ?? DateTime.MinValue
+                    }
+                    : null;
+
+                var state = localState ?? remoteState;
+                if (state != null)
+                    cards.Add(new LibraryCard(item, state));
+            }
+
+            return cards
+                .OrderByDescending(c => c.Playback.SavedUtc)
+                .ToList();
+        }
 
         private void GamepadTimer_Tick(object sender, object e)
         {
@@ -310,14 +426,39 @@ namespace StremioXbox.Views
 
         private void Items_ItemClick(object sender, ItemClickEventArgs e)
         {
-            var item = e.ClickedItem as LibraryItem;
-            if (item == null)
+            var card = e.ClickedItem as LibraryCard;
+            if (card == null)
                 return;
+
+            if (card.IsContinueWatching)
+            {
+                if (!string.IsNullOrWhiteSpace(card.PlaybackUrl))
+                {
+                    ShellPage.ShowPlayer(new PlayerArgs
+                    {
+                        Url = card.PlaybackUrl,
+                        VideoId = card.PlaybackVideoId,
+                        Type = card.Type,
+                        MetaId = card.Id,
+                        Title = card.Name
+                    });
+                    return;
+                }
+
+                Frame.Navigate(typeof(StreamsPage), new StreamsArgs
+                {
+                    Type = card.Type,
+                    VideoId = card.PlaybackVideoId,
+                    MetaId = card.Id,
+                    Title = card.Name
+                });
+                return;
+            }
 
             Frame.Navigate(typeof(DetailPage), new MetaArgs
             {
-                Type = item.Type,
-                Id = item.Id
+                Type = card.Type,
+                Id = card.Id
             });
         }
 

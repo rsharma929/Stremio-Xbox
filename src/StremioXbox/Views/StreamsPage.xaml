@@ -31,6 +31,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -77,9 +78,41 @@
                 TextWrapping="Wrap"
                 Margin="0,4,0,8" />
 
+            <StackPanel
+                Grid.Row="3"
+                Orientation="Horizontal"
+                Spacing="12"
+                Margin="0,0,0,8">
+                <TextBlock
+                    x:Name="EpisodeWatchStatus"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource AccentPurpleBrush}"
+                    FontWeight="SemiBold"
+                    Visibility="Collapsed" />
+
+                <Button
+                    x:Name="MarkWatchedButton"
+                    Click="MarkWatchedButton_Click"
+                    Visibility="Collapsed"
+                    IsTabStop="True"
+                    AutomationProperties.Name="Toggle watched state">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Image
+                            Source="ms-appx:///Assets/XButton.png"
+                            Width="22"
+                            Height="22"
+                            Stretch="Uniform" />
+                        <TextBlock
+                            x:Name="MarkWatchedButtonText"
+                            VerticalAlignment="Center"
+                            Text="Mark as watched" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
             <ListView
                 x:Name="StreamList"
-                Grid.Row="3"
+                Grid.Row="4"
                 Width="1100"
                 MaxWidth="1100"
                 HorizontalAlignment="Right"

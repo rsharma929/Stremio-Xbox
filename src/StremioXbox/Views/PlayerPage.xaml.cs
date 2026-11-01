@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using LibVLCSharp.Platforms.Windows;
 using LibVLCSharp.Shared;
 using StremioXbox.Services;
 using Windows.System.Display;
+using Windows.Storage;
 using Windows.UI.Core;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
@@ -30,6 +33,20 @@ namespace StremioXbox.Views
         private LibVLC _libVlc;
         private MediaPlayer _player;
         private bool _displayMatched;
+        private long _lastSavedTime = -1;
+        private long _lastServerSavedTime = -1;
+        private bool _serverSaveInProgress;
+        private bool _pendingServerSync;
+        private long _pendingServerTime;
+        private long _pendingServerDuration;
+        private bool _pendingServerForce;
+        private long _resumeTimeMs;
+        private bool _resumeApplied;
+
+        private const long PlaybackSaveIntervalMs = 5000;
+        private const string PlaybackStatePrefix = "playbackState:";
+
+        public PlayerArgs CurrentArgs => _args;
 
         private readonly DispatcherTimer _clockTimer =
         new DispatcherTimer
@@ -59,6 +76,8 @@ namespace StremioXbox.Views
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
             _args = (PlayerArgs)e.Parameter;
+            _resumeTimeMs = LoadSavedPlaybackTime(_args?.VideoId);
+            _resumeApplied = false;
             TitleText.Text = _args.Title ?? "";
             _displayRequest.RequestActive();
             ShowOverlay();
@@ -68,6 +87,7 @@ namespace StremioXbox.Views
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
+            SavePlaybackPosition("navigated-from", true);
             _overlayTimer.Stop();
             try { _displayRequest.RequestRelease(); } catch (Exception) { }
 
@@ -85,6 +105,14 @@ namespace StremioXbox.Views
             _gamepadTimer.Stop();
             _clockTimer.Stop();
             DisplayModeService.RestoreDefault();
+        }
+
+        public void HandleBackNavigation()
+        {
+            SavePlaybackPosition("back-requested", true);
+
+            if (App.RootFrame != null && App.RootFrame.CanGoBack)
+                App.RootFrame.GoBack();
         }
 
         // VideoView creates its swap chain first; LibVLC must be created with those options.
@@ -105,7 +133,12 @@ namespace StremioXbox.Views
             _player.Buffering += (s, a) => OnUi(() => Buffering.IsActive = a.Cache < 100);
             _player.TimeChanged += (s, a) => OnUi(() => UpdatePosition(a.Time));
             _player.EncounteredError += (s, a) => OnUi(() => ShowError("Playback failed. The stream may be offline or unsupported."));
-            _player.EndReached += (s, a) => OnUi(() => { if (Frame.CanGoBack) Frame.GoBack(); });
+            _player.EndReached += (s, a) => OnUi(() =>
+            {
+                SavePlaybackPosition("ended", true);
+                if (Frame.CanGoBack)
+                    Frame.GoBack();
+            });
             _player.Vout += (s, a) => OnUi(MatchDisplay);
             Video.MediaPlayer = _player;
 
@@ -124,6 +157,7 @@ namespace StremioXbox.Views
                 _player.AddSlave(MediaSlaveType.Subtitle, sub.Url, sub == selected);
             _player.Paused += (s, a) => OnUi(() =>
             {
+                SavePlaybackPosition("paused", true);
                 PlayPauseIcon.Symbol = Symbol.Play;
                 Window.Current.CoreWindow.PointerCursor =
                     new CoreCursor(CoreCursorType.Arrow, 0);
@@ -133,6 +167,7 @@ namespace StremioXbox.Views
 
         private void OnPlaying()
         {
+            ApplySavedPlaybackPosition();
             Window.Current.CoreWindow.PointerCursor = null;
 
             Buffering.IsActive = false;
@@ -157,12 +192,67 @@ namespace StremioXbox.Views
         private void UpdatePosition(long time)
         {
             var length = _player?.Length ?? 0;
+
+            if (!_resumeApplied && length > 0)
+                ApplySavedPlaybackPosition();
+
             PositionText.Text = Format(time);
             if (length > 0)
             {
                 DurationText.Text = Format(length);
                 Progress.Value = (double)time / length;
             }
+
+            if (_resumeApplied &&
+                (_lastSavedTime < 0 ||
+                Math.Abs(time - _lastSavedTime) >= PlaybackSaveIntervalMs)
+            )
+            {
+                SavePlaybackPosition("time-changed");
+            }
+        }
+
+        private void ApplySavedPlaybackPosition()
+        {
+            if (_resumeApplied || _player == null || _player.Length <= 0)
+                return;
+
+            _resumeApplied = true;
+
+            if (_resumeTimeMs <= 0 ||
+                _resumeTimeMs >= _player.Length * 0.95)
+            {
+                return;
+            }
+
+            var target = Math.Max(
+                0,
+                Math.Min(_player.Length - 1000, _resumeTimeMs));
+
+            _player.Time = target;
+            UpdatePosition(target);
+
+            Debug.WriteLine(
+                "Playback resumed: videoId=" +
+                (_args?.VideoId ?? "") +
+                ", timeMs=" + target +
+                ", durationMs=" + _player.Length);
+        }
+
+        private static long LoadSavedPlaybackTime(string videoId)
+        {
+            if (string.IsNullOrWhiteSpace(videoId))
+                return 0;
+
+            var key = PlaybackStatePrefix + videoId;
+            var value = ApplicationData.Current.LocalSettings.Values[key] as string;
+            if (string.IsNullOrWhiteSpace(value))
+                return 0;
+
+            var parts = value.Split('|');
+            return parts.Length > 2 && long.TryParse(parts[2], out var timeMs)
+                ? timeMs
+                : 0;
         }
 
         private void ShowError(string message)
@@ -269,6 +359,123 @@ namespace StremioXbox.Views
             var target = Math.Max(0, Math.Min(_player.Length - 1000, _player.Time + deltaMs));
             _player.Time = target;
             UpdatePosition(target);
+            SavePlaybackPosition("seek");
+        }
+
+        private void SavePlaybackPosition(
+            string reason,
+            bool forceServerSync = false)
+        {
+            if (_player == null ||
+                _args == null ||
+                string.IsNullOrWhiteSpace(_args.VideoId))
+            {
+                return;
+            }
+
+            var time = Math.Max(0, _player.Time);
+            var duration = Math.Max(0, _player.Length);
+            if (!_resumeApplied && time <= 0)
+                return;
+
+            if (duration <= 0)
+                return;
+
+            var key = PlaybackStatePrefix + _args.VideoId;
+            var value = string.Join("|", new[]
+            {
+                _args.VideoId,
+                _args.Title ?? "",
+                time.ToString(),
+                duration.ToString(),
+                DateTime.UtcNow.ToString("O"),
+                Uri.EscapeDataString(_args.Url ?? "")
+            });
+
+            ApplicationData.Current.LocalSettings.Values[key] = value;
+            _lastSavedTime = time;
+
+            Debug.WriteLine(
+                "Playback saved: reason=" + reason +
+                ", videoId=" + _args.VideoId +
+                ", title=" + (_args.Title ?? "") +
+                ", timeMs=" + time +
+                ", durationMs=" + duration);
+
+            _ = SyncPlaybackPositionAsync(time, duration, forceServerSync);
+        }
+
+        private async Task SyncPlaybackPositionAsync(
+            long time,
+            long duration,
+            bool force)
+        {
+            if (string.IsNullOrWhiteSpace(_args?.MetaId) ||
+                !AppServices.Settings.IsLoggedIn ||
+                (!force &&
+                 _lastServerSavedTime >= 0 &&
+                 Math.Abs(time - _lastServerSavedTime) < PlaybackSaveIntervalMs))
+            {
+                return;
+            }
+
+            if (_serverSaveInProgress)
+            {
+                if (force)
+                {
+                    _pendingServerSync = true;
+                    _pendingServerTime = time;
+                    _pendingServerDuration = duration;
+                    _pendingServerForce = true;
+                }
+
+                return;
+            }
+
+            _serverSaveInProgress = true;
+
+            try
+            {
+                await AppServices.Api.UpdateLibraryPlaybackAsync(
+                    AppServices.Settings.AuthKey,
+                    _args.MetaId,
+                    _args.VideoId,
+                    time,
+                    duration);
+
+                _lastServerSavedTime = time;
+
+                Debug.WriteLine(
+                    "Playback synced: videoId=" +
+                    _args.VideoId +
+                    ", libraryId=" + _args.MetaId +
+                    ", timeMs=" + time +
+                    ", durationMs=" + duration);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    "Playback sync failed: " + ex.Message);
+            }
+            finally
+            {
+                _serverSaveInProgress = false;
+
+                if (_pendingServerSync)
+                {
+                    var pendingTime = _pendingServerTime;
+                    var pendingDuration = _pendingServerDuration;
+                    var pendingForce = _pendingServerForce;
+
+                    _pendingServerSync = false;
+                    _pendingServerForce = false;
+
+                    _ = SyncPlaybackPositionAsync(
+                        pendingTime,
+                        pendingDuration,
+                        pendingForce);
+                }
+            }
         }
 
         private void TogglePause()

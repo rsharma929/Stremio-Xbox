@@ -48,10 +48,42 @@
                               IsItemClickEnabled="True" ItemClick="Episodes_ItemClick">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Padding="0,6">
-                                    <TextBlock Text="{Binding DisplayTitle}" FontSize="18" />
-                                    <TextBlock Text="{Binding Released}" FontSize="13" Foreground="{StaticResource MutedTextBrush}" />
-                                </StackPanel>
+                                <Grid Padding="0,6" ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding DisplayTitle}" FontSize="18" />
+                                        <TextBlock Text="{Binding Released}" FontSize="13"
+                                                   Foreground="{StaticResource MutedTextBrush}" />
+                                        <TextBlock Text="{Binding StatusText}"
+                                                   Visibility="{Binding StatusVisibility}"
+                                                   Foreground="{Binding StatusBrush}"
+                                                   FontSize="13" />
+                                    </StackPanel>
+
+                                    <Button Grid.Column="1"
+                                            Tag="{Binding}"
+                                            IsEnabled="{Binding CanMarkWatched}"
+                                            Click="MarkWatched_Click"
+                                            MinWidth="150"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="Mark watched">
+                                        <StackPanel Orientation="Horizontal"
+                                                    Spacing="6">
+                                            <Image
+                                                Source="ms-appx:///Assets/XButton.png"
+                                                Width="22"
+                                                Height="22"
+                                                Stretch="Uniform" />
+                                            <TextBlock
+                                                Text="{Binding MarkWatchedText}"
+                                                VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>

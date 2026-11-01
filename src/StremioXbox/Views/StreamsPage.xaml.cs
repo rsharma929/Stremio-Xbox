@@ -1,12 +1,15 @@
-﻿using System;
+﻿using Stremio.Core.Addons;
+using Stremio.Core.Api;
+using Stremio.Core.Streaming;
+using StremioXbox.Services;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Stremio.Core.Addons;
-using Stremio.Core.Streaming;
-using StremioXbox.Services;
+using Windows.Gaming.Input;
 using Windows.System;
 using Windows.UI;
 using Windows.UI.Core;
@@ -35,6 +38,12 @@ namespace StremioXbox.Views
 
         private CancellationTokenSource _loadCts;
         private bool _streamsReceived;
+        private readonly DispatcherTimer _gamepadTimer;
+        private bool _xButtonHeld;
+        private LibraryItem _libraryItem;
+        private List<Video> _episodeVideos = new List<Video>();
+        private HashSet<string> _watchedVideoIds =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public StreamsPage()
         {
@@ -48,6 +57,12 @@ namespace StremioXbox.Views
             SourceFilter.IsTabStop = false;
             StreamList.IsTabStop = false;
 
+            _gamepadTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _gamepadTimer.Tick += GamepadTimer_Tick;
+
             UpdateStreamWarningVisibility();
         }
 
@@ -56,8 +71,22 @@ namespace StremioXbox.Views
         {
             base.OnNavigatedTo(e);
 
+            _xButtonHeld = false;
+            _gamepadTimer.Start();
+
             _args = (StreamsArgs)e.Parameter;
             Header.Text = _args.Title ?? "";
+
+            if (!string.IsNullOrWhiteSpace(_args.WatchStatus))
+            {
+                EpisodeWatchStatus.Text = _args.WatchStatus;
+                EpisodeWatchStatus.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                EpisodeWatchStatus.Text = "Not watched";
+                EpisodeWatchStatus.Visibility = Visibility.Visible;
+            }
 
             SetImage(Backdrop, _args.Background);
 
@@ -80,6 +109,8 @@ namespace StremioXbox.Views
             try
             {
                 await AppServices.EnsureAddonsLoadedAsync();
+
+                await LoadEpisodeWatchStateAsync();
 
                 _subtitles = AppServices.Addons.GetSubtitlesAsync(
                     _args.Type,
@@ -151,6 +182,13 @@ namespace StremioXbox.Views
             }
         }
 
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            _gamepadTimer.Stop();
+            _loadCts?.Cancel();
+            base.OnNavigatedFrom(e);
+        }
+
         private async void StreamList_ItemClick(
             object sender,
             ItemClickEventArgs e)
@@ -210,8 +248,12 @@ namespace StremioXbox.Views
             ShellPage.ShowPlayer(new PlayerArgs
             {
                 Url = resolved.Url,
+                VideoId = _args.VideoId,
+                Type = _args.Type,
+                MetaId = _args.MetaId,
                 Headers = resolved.Headers,
                 Title = _args.Title,
+                Background = _args.Background,
                 Subtitles = subtitles,
                 LooksHdr =
                     text.Contains("HDR") ||
@@ -243,6 +285,148 @@ namespace StremioXbox.Views
 
             StreamWarning.Visibility =
                 Visibility.Visible;
+        }
+
+        private async void MarkWatchedButton_Click(
+            object sender,
+            RoutedEventArgs e)
+        {
+            await ToggleCurrentWatchStateAsync();
+        }
+
+        private void GamepadTimer_Tick(object sender, object e)
+        {
+            var gamepad = Gamepad.Gamepads.FirstOrDefault();
+            if (gamepad == null)
+                return;
+
+            var buttons = gamepad.GetCurrentReading().Buttons;
+            var xPressed = (buttons & GamepadButtons.X) != 0;
+
+            if (xPressed && !_xButtonHeld)
+                _ = ToggleCurrentWatchStateAsync();
+
+            _xButtonHeld = xPressed;
+        }
+
+        private async Task LoadEpisodeWatchStateAsync()
+        {
+            MarkWatchedButton.Visibility = Visibility.Collapsed;
+            EpisodeWatchStatus.Visibility = Visibility.Collapsed;
+            _libraryItem = null;
+            _episodeVideos = new List<Video>();
+            _watchedVideoIds.Clear();
+
+            if (!string.Equals(
+                    _args?.Type,
+                    "series",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(_args?.MetaId) ||
+                !AppServices.Settings.IsLoggedIn)
+            {
+                return;
+            }
+
+            try
+            {
+                var items = await AppServices.Api.GetLibraryAsync(
+                    AppServices.Settings.AuthKey);
+                _libraryItem = items.FirstOrDefault(item =>
+                    string.Equals(
+                        item.Id,
+                        _args.MetaId,
+                        StringComparison.OrdinalIgnoreCase));
+
+                var meta = await AppServices.Addons.GetMetaAsync(
+                    _args.Type,
+                    _args.MetaId);
+                _episodeVideos = WatchStateHelper.OrderEpisodes(
+                    meta?.Videos);
+
+                _watchedVideoIds = WatchStateHelper.Decode(
+                    _libraryItem?.State?.Watched,
+                    _episodeVideos);
+
+                MarkWatchedButton.Visibility = Visibility.Visible;
+                UpdateEpisodeWatchStatus();
+            }
+            catch (Exception)
+            {
+                // Stream loading can continue even if watch state cannot be loaded.
+            }
+        }
+
+        private async Task ToggleCurrentWatchStateAsync()
+        {
+            if (_libraryItem == null ||
+                _episodeVideos.Count == 0 ||
+                string.IsNullOrWhiteSpace(_args?.VideoId))
+            {
+                return;
+            }
+
+            var video = _episodeVideos.FirstOrDefault(item =>
+                string.Equals(
+                    item.Id,
+                    _args.VideoId,
+                    StringComparison.OrdinalIgnoreCase));
+            if (video == null)
+                return;
+
+            var isWatched = _watchedVideoIds.Contains(video.Id);
+            var watched = WatchStateHelper.SetVideo(
+                _libraryItem.State?.Watched,
+                _episodeVideos,
+                video,
+                !isWatched);
+
+            try
+            {
+                await AppServices.Api.UpdateLibraryWatchedAsync(
+                    AppServices.Settings.AuthKey,
+                    _libraryItem.Id,
+                    watched,
+                    !isWatched);
+
+                if (isWatched)
+                    _watchedVideoIds.Remove(video.Id);
+                else
+                    _watchedVideoIds.Add(video.Id);
+
+                if (_libraryItem.State == null)
+                    _libraryItem.State = new LibraryItemState();
+                _libraryItem.State.Watched = watched;
+                UpdateEpisodeWatchStatus();
+            }
+            catch (Exception ex)
+            {
+                // Keep the current state if the server update fails.
+                Debug.WriteLine("Stream watch toggle failed: " + ex.Message);
+            }
+        }
+
+        private void UpdateEpisodeWatchStatus()
+        {
+            var isWatched = _watchedVideoIds.Contains(_args.VideoId);
+            var state = _libraryItem?.State;
+            var inProgress = !isWatched &&
+                string.Equals(
+                    state?.VideoId,
+                    _args.VideoId,
+                    StringComparison.OrdinalIgnoreCase) &&
+                state.TimeOffset > 0 &&
+                state.Duration > 0 &&
+                state.TimeOffset < state.Duration * 0.95;
+
+            EpisodeWatchStatus.Text = isWatched
+                ? "Watched"
+                : inProgress
+                    ? "In progress"
+                    : "Not watched";
+            EpisodeWatchStatus.Visibility = Visibility.Visible;
+            MarkWatchedButtonText.Text = isWatched
+                ? "Mark as unwatched"
+                : "Mark as watched";
         }
 
         private void UpdateStreamWarningVisibility()

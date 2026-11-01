@@ -25,6 +25,18 @@
                                 Background="Transparent" BorderBrush="Transparent"
                                 BorderThickness="0" CornerRadius="8"
                                 IsHitTestVisible="False" />
+
+                        <Grid Width="300" Height="6"
+                              HorizontalAlignment="Left"
+                              VerticalAlignment="Bottom"
+                              Margin="4,0,0,8"
+                              Visibility="{Binding ProgressVisibility}">
+                            <Border Background="#664B456F" CornerRadius="3" />
+                            <Border Width="{Binding ProgressWidth}"
+                                    HorizontalAlignment="Left"
+                                    Background="#C020FF"
+                                    CornerRadius="3" />
+                        </Grid>
                     </Grid>
                     <TextBlock Width="300" Margin="4,10,0,0" FontSize="18"
                                Text="{Binding Name}" TextTrimming="CharacterEllipsis"
