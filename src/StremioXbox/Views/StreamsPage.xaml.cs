@@ -9,8 +9,10 @@ using Stremio.Core.Streaming;
 using StremioXbox.Services;
 using Windows.System;
 using Windows.UI;
+using Windows.UI.Core;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media;
 using Windows.UI.Xaml.Media.Imaging;
 using Windows.UI.Xaml.Navigation;
@@ -32,6 +34,7 @@ namespace StremioXbox.Views
             new ObservableCollection<string>();
 
         private CancellationTokenSource _loadCts;
+        private bool _streamsReceived;
 
         public StreamsPage()
         {
@@ -42,6 +45,8 @@ namespace StremioXbox.Views
 
             _sources.Add("All");
             SourceFilter.SelectedIndex = 0;
+            SourceFilter.IsTabStop = false;
+            StreamList.IsTabStop = false;
 
             UpdateStreamWarningVisibility();
         }
@@ -65,6 +70,9 @@ namespace StremioXbox.Views
             _sources.Clear();
             _sources.Add("All");
             SourceFilter.SelectedIndex = 0;
+            SourceFilter.IsTabStop = false;
+            StreamList.IsTabStop = false;
+            _streamsReceived = false;
 
             Loading.IsActive = true;
             Loading.Visibility = Visibility.Visible;
@@ -96,6 +104,17 @@ namespace StremioXbox.Views
                         ApplyStreamFilter();
                         UpdateStreamStatus();
                         UpdateStreamWarningVisibility();
+
+                        if (!_streamsReceived && _visibleStreams.Count > 0)
+                        {
+                            _streamsReceived = true;
+                            SourceFilter.IsTabStop = true;
+                            StreamList.IsTabStop = true;
+
+                            _ = Dispatcher.RunAsync(
+                                CoreDispatcherPriority.Normal,
+                                FocusFirstStream);
+                        }
                     });
 
                 await AppServices.Addons.GetStreamsIncrementalAsync(
@@ -125,10 +144,10 @@ namespace StremioXbox.Views
 
             if (_visibleStreams.Count > 0)
             {
-                StreamList.UpdateLayout();
-
-                (StreamList.ContainerFromIndex(0) as Control)?
-                    .Focus(FocusState.Programmatic);
+                _streamsReceived = true;
+                SourceFilter.IsTabStop = true;
+                StreamList.IsTabStop = true;
+                FocusFirstStream();
             }
         }
 
@@ -279,6 +298,40 @@ namespace StremioXbox.Views
             SelectionChangedEventArgs e)
         {
             ApplyStreamFilter();
+        }
+
+        private void SourceFilter_DropDownClosed(object sender, object e)
+        {
+            FocusFirstStream();
+        }
+
+        private void SourceFilter_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if ((e.Key == VirtualKey.GamepadB || e.Key == VirtualKey.Escape) &&
+                SourceFilter.IsDropDownOpen)
+            {
+                SourceFilter.IsDropDownOpen = false;
+                FocusFirstStream();
+                e.Handled = true;
+            }
+        }
+
+        private void FocusFirstStream()
+        {
+            if (_visibleStreams.Count == 0)
+                return;
+
+            StreamList.UpdateLayout();
+            var item = StreamList.ContainerFromIndex(0) as Control;
+
+            if (item == null)
+            {
+                StreamList.ScrollIntoView(_visibleStreams[0]);
+                StreamList.UpdateLayout();
+                item = StreamList.ContainerFromIndex(0) as Control;
+            }
+
+            item?.Focus(FocusState.Programmatic);
         }
 
         private void ApplyStreamFilter()

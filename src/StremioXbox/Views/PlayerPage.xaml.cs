@@ -54,11 +54,10 @@ namespace StremioXbox.Views
         {
             return Math.Abs(current) >= threshold &&
                    Math.Abs(previous) < threshold;
-        }    
+        }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
-            Window.Current.CoreWindow.PointerCursor = null;
             _args = (PlayerArgs)e.Parameter;
             TitleText.Text = _args.Title ?? "";
             _displayRequest.RequestActive();
@@ -86,7 +85,6 @@ namespace StremioXbox.Views
             _gamepadTimer.Stop();
             _clockTimer.Stop();
             DisplayModeService.RestoreDefault();
-            Window.Current.CoreWindow.PointerCursor = new CoreCursor(CoreCursorType.Arrow, 0);
         }
 
         // VideoView creates its swap chain first; LibVLC must be created with those options.
@@ -208,10 +206,11 @@ namespace StremioXbox.Views
 
             // A = play/pause
             if (Pressed(buttons, GamepadButtons.A))
-                if (Overlay.Visibility != Visibility.Visible) { 
+                if (Overlay.Visibility != Visibility.Visible)
+                {
                     TogglePause();
                 }
-                
+
 
             // Left stick or D-pad left/right = seek
             if (Overlay.Visibility != Visibility.Visible)

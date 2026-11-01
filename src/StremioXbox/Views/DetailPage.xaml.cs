@@ -1,10 +1,12 @@
+using Stremio.Core.Addons;
+using StremioXbox.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Stremio.Core.Addons;
-using StremioXbox.Services;
+using Windows.System;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media.Imaging;
 using Windows.UI.Xaml.Navigation;
 
@@ -66,6 +68,40 @@ namespace StremioXbox.Views
             EpisodesPanel.Visibility = Visibility.Visible;
             SeasonPicker.SelectedIndex = 0;
             SeasonPicker.Focus(FocusState.Programmatic);
+        }
+
+        private void SeasonPicker_DropDownClosed(object sender, object e)
+        {
+            FocusFirstEpisode();
+        }
+
+        private void SeasonPicker_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if ((e.Key == VirtualKey.GamepadB || e.Key == VirtualKey.Escape) &&
+                SeasonPicker.IsDropDownOpen)
+            {
+                SeasonPicker.IsDropDownOpen = false;
+                FocusFirstEpisode();
+                e.Handled = true;
+            }
+        }
+
+        private void FocusFirstEpisode()
+        {
+            if (Episodes.Items.Count == 0)
+                return;
+
+            Episodes.UpdateLayout();
+            var item = Episodes.ContainerFromIndex(0) as Control;
+
+            if (item == null)
+            {
+                Episodes.ScrollIntoView(Episodes.Items[0]);
+                Episodes.UpdateLayout();
+                item = Episodes.ContainerFromIndex(0) as Control;
+            }
+
+            item?.Focus(FocusState.Programmatic);
         }
 
         private static void SetImage(Image image, string url)

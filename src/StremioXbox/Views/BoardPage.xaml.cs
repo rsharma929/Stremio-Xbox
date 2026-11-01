@@ -71,6 +71,7 @@ namespace StremioXbox.Views
 
         private bool _loaded;
         private bool _verticalInputHeld;
+        private bool _horizontalInputHeld;
         private bool _menuInputHeld;
         private bool _backInputHeld;
 
@@ -100,6 +101,9 @@ namespace StremioXbox.Views
         public BoardPage()
         {
             InitializeComponent();
+            RequiresPointer =
+                Windows.UI.Xaml.Controls.RequiresPointer.Never;
+            App.SetPointerInputEnabled(false);
 
             NavigationCacheMode =
                 NavigationCacheMode.Enabled;
@@ -118,7 +122,16 @@ namespace StremioXbox.Views
 
             base.OnNavigatedTo(e);
 
+            RequiresPointer =
+                Windows.UI.Xaml.Controls.RequiresPointer.Never;
+
+            // Board is controller-first. Explicitly disable pointer input
+            // every time this page becomes active so the cursor cannot return
+            // after navigating away from and back to the Board.
+            App.SetPointerInputEnabled(false);
+
             _verticalInputHeld = false;
+            _horizontalInputHeld = false;
             _menuInputHeld = false;
             _backInputHeld = false;
 
@@ -182,6 +195,28 @@ namespace StremioXbox.Views
 
             if (IsMenuOpen)
                 return;
+
+            var leftPressed =
+                (reading.Buttons &
+                 GamepadButtons.DPadLeft) != 0 ||
+                reading.LeftThumbstickX < -0.65;
+
+            var rightPressed =
+                (reading.Buttons &
+                 GamepadButtons.DPadRight) != 0 ||
+                reading.LeftThumbstickX > 0.65;
+
+            var horizontalPressed =
+                leftPressed || rightPressed;
+
+            if (horizontalPressed &&
+                !_horizontalInputHeld)
+            {
+                MovePosterFocus(
+                    rightPressed ? 1 : -1);
+            }
+
+            _horizontalInputHeld = horizontalPressed;
 
             var upPressed =
                 (reading.Buttons &
@@ -357,6 +392,10 @@ namespace StremioXbox.Views
             }
 
             BoardSideMenu.IsPaneOpen = true;
+            CategoryButton.IsTabStop = true;
+            JumpButton.IsTabStop = true;
+            _verticalInputHeld = false;
+            _horizontalInputHeld = false;
 
             CategoryButton.Focus(
                 FocusState.Programmatic);
@@ -367,6 +406,10 @@ namespace StremioXbox.Views
             _categoryMenu?.Hide();
             _jumpMenu?.Hide();
             BoardSideMenu.IsPaneOpen = false;
+            CategoryButton.IsTabStop = false;
+            JumpButton.IsTabStop = false;
+            _verticalInputHeld = false;
+            _horizontalInputHeld = false;
 
             Dispatcher.RunAsync(
                 CoreDispatcherPriority.Low,
@@ -382,6 +425,8 @@ namespace StremioXbox.Views
 
             _categoryMenu.ShowAt(
                 CategoryButton);
+
+            FocusFirstMenuItem(_categoryMenu);
         }
 
         private void JumpButton_Click(
@@ -393,6 +438,8 @@ namespace StremioXbox.Views
 
             _jumpMenu.ShowAt(
                 JumpButton);
+
+            FocusFirstMenuItem(_jumpMenu);
         }
 
         private void CategoryToggle_Click(
@@ -420,7 +467,17 @@ namespace StremioXbox.Views
                 {
                     RebuildMenus();
                     _categoryMenu.ShowAt(CategoryButton);
+                    FocusFirstMenuItem(_categoryMenu);
                 });
+        }
+
+        private static void FocusFirstMenuItem(
+            MenuFlyout menu)
+        {
+            var first =
+                menu?.Items.FirstOrDefault() as Control;
+
+            first?.Focus(FocusState.Programmatic);
         }
 
         private void JumpCategory_Click(
@@ -828,15 +885,17 @@ namespace StremioXbox.Views
             KeyRoutedEventArgs e)
         {
             if (IsMenuOpen)
-            {
-                e.Handled = true;
                 return;
-            }
 
-            if (e.Key == VirtualKey.Up ||
-                e.Key == VirtualKey.Down ||
-                e.Key == VirtualKey.GamepadDPadUp ||
-                e.Key == VirtualKey.GamepadDPadDown)
+            if (Gamepad.Gamepads.Count > 0 &&
+                (e.Key == VirtualKey.Left ||
+                 e.Key == VirtualKey.Right ||
+                 e.Key == VirtualKey.Up ||
+                 e.Key == VirtualKey.Down ||
+                 e.Key == VirtualKey.GamepadDPadLeft ||
+                 e.Key == VirtualKey.GamepadDPadRight ||
+                 e.Key == VirtualKey.GamepadDPadUp ||
+                 e.Key == VirtualKey.GamepadDPadDown))
             {
                 e.Handled = true;
             }
@@ -846,7 +905,82 @@ namespace StremioXbox.Views
             object sender,
             KeyRoutedEventArgs e)
         {
-            BoardPage_KeyDown(sender, e);
+            if (IsMenuOpen)
+                return;
+
+            if (Gamepad.Gamepads.Count > 0 &&
+                (e.Key == VirtualKey.Left ||
+                 e.Key == VirtualKey.Right ||
+                 e.Key == VirtualKey.Up ||
+                 e.Key == VirtualKey.Down ||
+                 e.Key == VirtualKey.GamepadDPadLeft ||
+                 e.Key == VirtualKey.GamepadDPadRight ||
+                 e.Key == VirtualKey.GamepadDPadUp ||
+                 e.Key == VirtualKey.GamepadDPadDown))
+            {
+                e.Handled = true;
+            }
+        }
+
+        private void BoardPage_Loaded(
+            object sender,
+            RoutedEventArgs e)
+        {
+            Dispatcher.RunAsync(
+                CoreDispatcherPriority.Normal,
+                () => RestoreCurrentSelection());
+        }
+
+        private void MovePosterFocus(int amount)
+        {
+            var focused =
+                FocusManager.GetFocusedElement()
+                as DependencyObject;
+
+            var item =
+                FindParent<ListViewItem>(focused);
+
+            var list =
+                FindParent<ListView>(focused);
+
+            if (item == null || list == null)
+                return;
+
+            var currentIndex =
+                list.IndexFromContainer(item);
+
+            if (currentIndex < 0)
+                return;
+
+            var nextIndex =
+                Math.Max(
+                    0,
+                    Math.Min(
+                        list.Items.Count - 1,
+                        currentIndex + amount));
+
+            if (nextIndex == currentIndex)
+                return;
+
+            UpdateFocusedTitleIndex();
+
+            var nextItem =
+                list.ContainerFromIndex(nextIndex)
+                as Control;
+
+            if (nextItem == null)
+            {
+                list.ScrollIntoView(
+                    list.Items[nextIndex]);
+
+                list.UpdateLayout();
+
+                nextItem =
+                    list.ContainerFromIndex(nextIndex)
+                    as Control;
+            }
+
+            nextItem?.Focus(FocusState.Keyboard);
         }
 
         private void Poster_ItemClick(

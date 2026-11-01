@@ -61,7 +61,10 @@
                     Header="Source"
                     MinWidth="260"
                     HorizontalAlignment="Right"
-                    SelectionChanged="SourceFilter_SelectionChanged" />
+                    IsTabStop="False"
+                    SelectionChanged="SourceFilter_SelectionChanged"
+                    DropDownClosed="SourceFilter_DropDownClosed"
+                    KeyDown="SourceFilter_KeyDown" />
             </Grid>
 
             <TextBlock
@@ -87,6 +90,7 @@
                 ScrollViewer.VerticalScrollMode="Enabled"
                 SelectionMode="None"
                 IsItemClickEnabled="True"
+                IsTabStop="False"
                 ItemClick="StreamList_ItemClick">
 
                 <ListView.ItemTemplate>

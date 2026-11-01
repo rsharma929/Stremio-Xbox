@@ -37,7 +37,13 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <ComboBox x:Name="SeasonPicker" Header="Season" MinWidth="200" SelectionChanged="SeasonPicker_SelectionChanged" />
+                    <ComboBox
+                        x:Name="SeasonPicker"
+                        Header="Season"
+                        MinWidth="200"
+                        SelectionChanged="SeasonPicker_SelectionChanged"
+                        DropDownClosed="SeasonPicker_DropDownClosed"
+                        KeyDown="SeasonPicker_KeyDown" />
                     <ListView x:Name="Episodes" Grid.Row="1" Margin="0,12,0,0" SelectionMode="None"
                               IsItemClickEnabled="True" ItemClick="Episodes_ItemClick">
                         <ListView.ItemTemplate>
